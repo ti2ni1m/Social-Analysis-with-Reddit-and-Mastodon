@@ -1,0 +1,1108 @@
+---
+title: "COMP 3020 Social Web Analytics Assignment"
+author: "Muhammed Mafawalla, Manan Bhatia, Rosmit Gyawali and Shekhar Patel"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Declaration
+
+| Student Name       | Student Number | Contribution |
+|--------------------|----------------|--------------|
+| Muhammed Mafawalla | 22024540       | 25%          |
+| Manan Bhatia       | 22035587       | 25%          |
+| Rosmit Gyawali     | 22069030       | 25%          |
+| Shekhar Patel      | 22034335       | 25%          |
+
+By including this statement, we the authors of this work, verify that:
+
+* We hold a copy of this assignment that we can produce if the original is lost or damaged.
+* We hereby certify that no part of this assignment/product has been copied from any other student's work or from any other source except where due acknowledgement is made in the assignment.
+* No part of this assignment/product has been written/produced for us by another person except where such collaboration has been authorised by the subject lecturer/tutor concerned.
+* We are aware that this work may be reproduced and submitted to plagiarism detection software programs to detect possible plagiarism (which may retain a copy on its database for future plagiarism checking).
+* We hereby certify that we have read and understood what the School of Computing and Mathematics defines as minor and substantial breaches of misconduct as outlined in the learning guide for this unit.
+
+
+# Library Import
+```{r include=FALSE}
+library("tm") # Term frequency matrix
+library("SnowballC") # Stemming of text
+library("RedditExtractoR") # Reddit API
+library(wordcloud) # Created of Word Cloud
+library(ggplot2) # Data Visualisation
+library(rtoot) # Mastodon API
+library(knitr) # Table generation
+library(igraph) # graphs and visualization.
+```
+
+# 1. Question 1
+# Library Import
+## 1.1 Identify relevant subreddits on Reddit, related to your chosen topic. Select three subreddits with the highest number of subscribers for the weekly period and get their URLs. 
+We have selected three subreddits for Apple Inc. These subreddits represent Apple's popular products:
+
+* iPhone: https://www.reddit.com/r/iPhone/
+* Mac: https://www.reddit.com/r/mac/
+* Watch: https://www.reddit.com/r/AppleWatch/
+
+## 1.2 Retrieve the text (posts) from each of these subreddits.
+
+Firstly, using the Reddit API, we will retrieve the subreddits using the `find_thread_urls()` function. A data set can be created with all of the attributes of the thread. Let's find top links for threads and comments for each subreddit posted in the last week.
+
+```{r}
+iPhoneThreads <- find_thread_urls(subreddit = 'iphone', sort_by = 'top', period = 'week')
+watchThreads <- find_thread_urls(subreddit = 'AppleWatch', sort_by = 'top', period = 'week')
+macThreads <- find_thread_urls(subreddit = 'mac', sort_by = 'top', period = 'week')
+
+iPhoneThreads <- read.csv("Data/iPhoneThreads.csv")
+watchThreads <- read.csv("Data/watchThreads.csv")
+macThreads <- read.csv("Data/macThreads.csv")
+```
+
+We can examine the structure and dimensions for each of the subreddit data.
+
+```{r}
+class(iPhoneThreads)
+class(macThreads)
+class(watchThreads)
+```
+
+Dimensions
+
+```{r}
+dim(iPhoneThreads)
+dim(macThreads)
+dim(watchThreads)
+```
+
+
+The data has been returned as a data frame.
+
+```{r}
+str(iPhoneThreads)
+```
+
+As we are only interested in the text data, we will extract the column `text` from our dataframe.
+```{r}
+iPhone <- iPhoneThreads$text
+watch <- watchThreads$text
+mac <- macThreads$text
+```
+
+```{r}
+class(iPhone)
+length(iPhone)
+```
+
+For each of our subreddits, we now have a character array representing the text data for each post.
+
+### 1.2.1 Data Preprocessing
+
+We will now preprocess our data to ensure we can conduct analysis on it. Our data pre-processing will include removing numbers, removing punctuation, word stemming etc.
+
+Since we will complete the data cleaning and processing for each subreddit, we will create a function in order to not repeat code.
+
+```{r}
+dataPreprocessing <- function(array) {
+  corpus <- Corpus(VectorSource(array))
+  corpus <- tm_map(corpus, function(x) iconv(x, to='UTF8', sub='byte'))
+  tm <- tm_map(corpus, function(x) iconv(x, to='ASCII', sub=' ')) # remove special characters
+  tm <- tm_map(tm, removeNumbers) # remove numbers
+  tm <- tm_map(tm, removePunctuation) # remove punctuation
+  tm <- tm_map(tm, stripWhitespace) # remove whitespace
+  tm <- tm_map(tm, tolower) # convert all to lowercase
+  tm <- tm_map(tm, removeWords, stopwords()) # remove stopwords
+  #tm <- tm_map(tm, stemDocument) # convert all words to their stems
+  return(tm)
+}
+```
+
+We now easily apply this function over all our subreddits.
+
+```{r include=FALSE}
+iPhone.tm <- dataPreprocessing(iPhone)
+watch.tm <- dataPreprocessing(watch)
+mac.tm <- dataPreprocessing(mac)
+```
+
+
+### 1.2.2 Creating a Document Term Matrix (DTM)
+We will first create the document term matrix where each record represents a document(in our case a reddit post) and each column represents a word. Moreover we will remove any empty reddit posts.
+
+```{r}
+documentTermMatrix <- function(termMatrix) {
+  dtm <- as.matrix(DocumentTermMatrix(termMatrix))
+  empties <- which(rowSums(abs(dtm)) == 0)
+  return(dtm[-empties,])
+}
+```
+
+
+We will create a function for this transformation as well.
+```{r}
+iPhone.dtm <- documentTermMatrix(iPhone.tm)
+watch.dtm <- documentTermMatrix(watch.tm)
+mac.dtm <- documentTermMatrix(mac.tm)
+```
+
+
+### 1.2.3 Creating a Term Document Matrix (TDM)
+Next we will transpose our document term matrix into a term document matrix. Now, each row will represent a term and each column will represent a reddit post. We will also create a function for this processing.
+
+```{r}
+termDocumentMatrix <- function(termMatrix) {
+  tdm <- as.matrix(TermDocumentMatrix(termMatrix))
+  empties <- which(colSums(as.matrix(tdm)) == 0)
+  return(as.matrix(tdm[,-empties]))
+}
+```
+
+```{r}
+iPhone.tdm <- termDocumentMatrix(iPhone.tm)
+watch.tdm <- termDocumentMatrix(watch.tm)
+mac.tdm <- termDocumentMatrix(mac.tm)
+```
+
+
+## 1.3 Display the subreddit name and create a word cloud for the posts within each subreddit, resulting in a total of three-word clouds. 
+
+We will create the word cloud using term document matrix. Similar to the above, we will create a function to remove words that have "NA" as a count. We will also suppress the warnings and adjust specific arguments of the `wordcloud()` function such as word rotation, colors etc. 
+
+```{r}
+wordCloud <- function(tdm) {
+  freqs = rowSums(tdm)
+  freqs = freqs[!is.na(freqs)] # removal of words which have no frequency
+  suppressWarnings( # supression of warnings
+    wordcloud(names(freqs),
+              freqs,
+              random.order = FALSE, # plot words in decscending frequency
+              rot.per = 0.35, # proportion words with 90 degree rotation
+              colors = brewer.pal(8, "Dark2"), # coloring of words from least to most frequent
+              max.words = 100, # plot 100 words
+        )
+    )
+}
+```
+
+### 1.3.1 iPhone 
+```{r}
+wordCloud(iPhone.tdm)
+```
+
+In this word cloud, the discussions are all about the hardware, the software, the company, the features, the problems and the comparisons of the most popular phone in the world, iPhone. The main word from the word cloud is the topic itself, iPhone where all the features like the camera, battery, apps and the software operating system called iOS and also right cases and right phone to get. These discussions on this subreddit shows that how important iPhone is to the customers and the same customers who want to know the features of the phone. 
+
+### 1.3.2 Mac 
+```{r}
+wordCloud(mac.tdm)
+```
+
+From the word cloud above, the main discussion on this subreddit is about first product of apple, Mac. There are many products within the Mac category,for example the laptop Macbook, the  iMac, softwares like the Sonoma Operating System, comparisons to the windows operating system, other hardwares needed for iMac like a keyboard and mouse, and other features like USB, RAM and the apps in the mac. This shows that the customers and redditors are interested and just want to know more about Mac. Therefore, the discussions in the subreddit proves that the customers want mac and want to know more about them.
+
+### 1.3.3 Apple Watch 
+```{r}
+wordCloud(watch.tdm)
+```
+The word cloud above talks about the Apple watch on the subreddit called 'Apple Watch'. Discussions like the hardware itself, features like the heart rate, battery charge, workout routines, the operating system called watchos and the bands of the watch. The most common word in the word cloud is the word itself, watch shows that even customers are interested in this apple product. They also compare garmin watches with apple watches as well. So in the end, this tell us that just like iPhone and Mac, Apple Watch is equally important to customers and that the product they want is for a healthy lifestyle.
+
+## 1.4 Comment on your word clouds, explaining the topics and discussions taking place in each subreddit
+Comments have been answered above
+
+# 2. Question 2
+## 2.1 Aggregate all three subreddit text you obtained in question 1 and create a column to label each text with its respective subreddit number.  For instance, assign '1' to text from the first subreddit, '2' to text from the second subreddit, and '3' to text from the third subreddit. 
+
+### 2.1.1 Text Preprocessing
+Using the combine `c()` function, we will aggregate the three subreddit data from question 1 into one variable
+```{r}
+reddit.text <- c(iPhone, watch, mac)
+```
+
+We will now create a `Corpus()` object of the combined subreddits. A corpus contains a collection of documents, where in our case, each subreddit represents a document. 
+
+```{r}
+reddit.corpus <- Corpus(VectorSource(reddit.text))
+```
+
+We will now convert our corpus to the "American Code for Information Interchange"(ASCII) computer language format and remove any white space from our terms.
+```{r}
+reddit.corpus <- tm_map(reddit.corpus, function(x) iconv(x, to='ASCII'))
+reddit.corpus <- tm_map(reddit.corpus, stripWhitespace)
+```
+
+
+### 2.1.2 TF-IDF Matrix
+
+We will first create a term document matrix to store our subreddits. Moreover, using the `control = list()`, we will specify additional text processing functions. For example in the English language certain words that hold no significance such as "the", "a", "and" are called stopwords. Thus, we will remove them. Additionally we will use a stemming algorithm to reduce words to their base form. Words such as "retrieval", "retrieved" will be reduced to the root word "retrieve". Since our reddit text data may contain unwanted characters, we will apply a variety of functions such `removeNumber`, `removePunctuation` etc. 
+
+```{r}
+reddit.tdm <- TermDocumentMatrix(reddit.corpus,
+   control = list(
+     removePunctuation = TRUE,
+     stopwords = TRUE,
+     removeNumbers = TRUE,
+     tolower = TRUE,
+     stemming=TRUE)
+   )
+```
+
+
+Next we will apply the TF-IDF weights and convert it into a document term matrix 
+```{r}
+reddit.wtdm <- weightTfIdf(reddit.tdm) # Retrieve the weighted Term Document Matrix
+reddit.matrix <- t(as.matrix(reddit.wtdm)) # Transpose weighted Term Document Matrix into Document Term Matrix
+```
+
+We will remove any empty subreddit data.
+```{r}
+empties <- which(rowSums(abs(reddit.matrix)) == 0)
+reddit.matrix <- reddit.matrix[-empties,]
+```
+
+```{r}
+emptiesTDM <- which(colSums(as.matrix(reddit.tdm)) == 0)
+reddit.tdm <- reddit.tdm[,-emptiesTDM]
+```
+
+
+
+## 2.2 Next, apply K-means clustering to cluster the combined text
+### 2.2.1 Euclidean Distance
+K-means is a non-supervised machine learning algorithm used to cluster data. It is a centroid based clustering algorithm which partitions the data points into "k" amount of clusters. 
+
+We wish to compute the sum of squares within score(SSW) for each cluster between 1 and 15. We will first create an empty vector to store the SSW scores
+```{r}
+SSW <- c()
+```
+
+
+We will iterate over values of k from 1 to 15 generating the sum of squares within(SSW) to select the best number of clusters. We would like to minimise the SSW score.
+```{r}
+for(k in 1:15){
+  K = kmeans(reddit.matrix, centers=k, nstart=3)
+  SSW[k] <- K$tot.withinss
+}
+```
+
+We will then plot the SSW scores and then using the "elbow method" find the best value for k.
+```{r}
+plot(1:15,SSW, type="b")
+```
+From the above plot, we can see there is an elbow at 5 clusters. However the SSW continues to drop for higher number of clusters. Given the large amount of clusters we can investigate using a different distance metric.
+
+K-Means uses euclidean distance by default, which may not be appropriate for document vectors. We can investigate k-means with the cosine similarity function using multi-dimensional scaling. 
+
+### 2.2.1 Cosine Similarity with MDS
+We will normalise all posts
+```{r}
+norm.reddit.matrix <- diag(1/sqrt(rowSums(reddit.matrix^2))) %*% reddit.matrix
+```
+
+We will then create the distance matrix using euclidean distance
+```{r}
+D <- dist(norm.reddit.matrix, method = "euclidean")^2/2
+```
+
+We will then perform multidimensional scaling using 300 dimensions
+```{r}
+mds.reddit.matrix <- cmdscale(D, k=170)
+```
+
+The Reddit posts are now projected into a 300 dimensional euclidean space, we can now use the elbow method to find the optimal number of clusters.
+```{r}
+SSWMDS <- c()
+for(k in 1:15){
+  K = kmeans(mds.reddit.matrix, centers=k, nstart=3)
+  SSWMDS[k] <- K$tot.withinss
+}
+```
+
+```{r}
+plot(1:15,SSWMDS, type="b")
+```
+From the above plot, there is an elbow at 7 clusters.
+
+
+## 2.3 Visualise the results in two-dimensional vector space. Ensure your visualization displays both the clusters and the original labels of the documents (where each text is considered a document). 
+
+### 2.3.1 Dimensionality Reduction
+
+In order to visualise the data, we need to reduce it to two dimensions. We will employ principal component analysis(PCA) and multidimensional scaling(MDS) to achieve this.
+
+### 2.3.2 Colour Assignment
+To aid in analysis, we will assign colors to each of our subreddits:
+
+* iPhone: red
+* Mac: blue
+* Watch: green
+
+```{r}
+colours <- c(rep("red", length(iPhone)), rep("blue", length(mac)), rep("green", length(watch)))
+```
+
+We will remove the colours with empty posts
+```{r}
+colours <- colours[-empties]
+```
+
+
+### 2.3.3 Principal Component Analysis(PCA)
+
+Firstly we will examine the use of PCA with euclidean distance for dimensionality reduction
+
+```{r}
+pcaT <- prcomp(reddit.matrix)
+```
+
+```{r}
+summary(pcaT)$importance[,1:5]
+```
+
+Unfortunately, with two principal components we explain only 3% of the variation. We can visualise the first two components below.
+
+
+```{r}
+plot(pcaT$x[,1], pcaT$x[,2], col=colours, pch=16)
+```
+
+Given the poor performance, we will employ MDS with a variety of distance measures to help us better visualise the data.
+
+### 2.3.4 MDS using Cosine Distance
+
+```{r eval=FALSE, include=FALSE}
+T <- as.matrix(reddit.wtdm)
+CT <- T %*% diag(1/sqrt(colSums(T^2)))
+D <- dist(t(CT), method = "euclidean")^2/2
+mdsT <- cmdscale(D, k=2)
+plot(mdsT[,1], mdsT[,2], col=colours, pch=16)
+```
+### 2.3.5 Binary Distance using unweighted posts
+```{r}
+M <- as.matrix(reddit.tdm)
+D = dist(t(M), method = "binary")
+mdsM <- cmdscale(D, k=2)
+```
+
+```{r}
+plot(mdsM[,1], mdsM[,2], col=colours, pch=16)
+legend("bottomright", legend=c("iPhone", "Mac", "Apple Watch"), col=c('red', 'blue', 'green'), pch=c(19))
+```
+From the above plot, we can generally cluster each of the subreddits although there is some overlap. Posts of Apple Watch tend to be cocentrated on certain topics and clump together. Compared with iPhone and Apple Watch which are spread apart. Moreover, iPhone and Mac seem to diverge from each other indicating their unique characteristics, one being a phone and another a laptop.
+
+Regarding the overlap seen, we can infer this is due to common topics such as Apple, screen battery life etc. The overlap between Apple Watch and iPhone could contain topics discussing pairing and communication between these devices.
+
+Overall it can be noted that iPhone and Mac have differing topics being discussed and there an exists an overlap between these subreddits.
+
+
+
+### 2.3.6 Binary Distance using weighted(TF-IDF) posts
+```{r}
+D <- dist(reddit.matrix, method = "binary")
+mdsT <- cmdscale(D, k=2)
+```
+
+```{r}
+plot(mdsT[,1], mdsT[,2], col=colours, pch=16)
+legend("bottomright", legend=c("iPhone", "Mac", "Apple Watch"), col=c('red', 'blue', 'green'), pch=c(19))
+```
+The plots of weighted and unweighted binary distances appear similar and thus our interpretation would be the same.
+
+### 2.3.7 Cosine distance with unweighted posts
+```{r}
+M <- as.matrix(reddit.tdm)
+CM <- M %*% diag(1/sqrt(colSums(M^2)))
+D <- dist(t(CM), method = "euclidean")^2/2
+mdsM <- cmdscale(D, k=2)
+```
+
+```{r}
+plot(mdsM[,1], mdsM[,2], col=colours, pch=16)
+legend("bottomright", legend=c("iPhone", "Mac", "Apple Watch"), col=c('red', 'blue', 'green'), pch=c(19))
+```
+
+Using the unweighted version of cosine distance produces a difference in the spread of Mac. The data points of Mac are widely dispersed along the first component along the x axis. Moreover, similar to the binary distance, Apple watch forms a tight cluster however it scatters along with Mac. There is a greater overlap between Mac and Apple Watch, where Apple Watch moves in the same direction. Furthermore, iPhone and Mac move in opposite directions similar to the binary distance.
+
+
+### 2.3.1 Clusters Terms
+
+We can examine the words belonging to each cluster. We will create a function to automate this retrieval
+```{r}
+retrieveTermsAtCluster <- function(clusterNumber, numberTerms, K, reddit.matrix) {
+  postsID = which(K$cluster == clusterNumber)
+  clusterPosts = reddit.matrix[postsID,]
+  clusterTermWeight = colMeans(clusterPosts)
+  sort(clusterTermWeight, decreasing = TRUE)[1:numberTerms]
+}
+```
+
+We can now retrieve the words at cluster 1
+```{r}
+retrieveTermsAtCluster(clusterNumber = 1, numberTerms = 10, K, reddit.matrix)
+```
+
+
+
+## 2.4 Comment on your results. Assess the performance of K-means clustering in terms of correctly identifying the clusters. Did it effectively capture the underlying patterns?
+
+
+# Question 3
+## 3. Examine whether there exists a linear relationship between the number of comments in a subreddit and the date. Note: You might need to format the date in your dataset appropriately. Visualize your findings by plotting the data along with the regression line. 
+
+We will select the iPhone subreddit to answer this question and question four.
+
+## 3.1 Hypothesis test for the slope of the line
+
+Apply the **hypothesis test for the slope of the line** as we are testing the **significance** of a single slope coefficient.
+
+We use a **hypothesis test** to determine if the slope coefficient(b) in a linear regression model is significantly different from zero.
+
+Firstly, let's state the hypothesis
+
+### 3.1.1 Step 1
+$H_0 : b = 0$ (there is no linear relationship, which means the slope coefficient (b) is equal to zero)
+
+$H_1 : b\ne 0$ (there is a linear relationship, which means the slope coefficient (b) is not equal to zero)
+
+### 3.1.2 Step 2
+$\alpha = 0.05$. Reject if p-value < 0.05
+
+### 3.1.3 Step 3
+
+Convert the date to numeric format for regression
+```{r}
+iPhoneThreads$dateNumeric <- as.numeric(as.Date(iPhoneThreads$date_utc))
+```
+
+Fit a linear regression model
+```{r}
+linRegression <- lm(comments ~ dateNumeric, data=iPhoneThreads)
+```
+
+Create a bootstrap distribution of b where the null hypothesis is true (b = 0)
+```{r}
+boot.dist <- replicate(1000, {
+  comments.perm <- sample(iPhoneThreads$comments) # shuffle one variable to force population b = 0 
+  fit <- lm(comments.perm ~ iPhoneThreads$dateNumeric) # fit the straight line model
+  coef(fit)[2] # return the fitted b
+})
+```
+
+Examine the distribution of b, when the population b = 0
+```{r}
+ggplot(as.data.frame(boot.dist), aes(x = boot.dist)) +
+  geom_histogram(color="black", fill="lightpink") +
+  labs(title="Slope Coefficient Bootstrap", x="Slope Coefficient", y="Frequency")
+```
+We can now extract the slope from our linear regression model.
+
+```{r}
+slope <- coef(linRegression)[2]
+slope
+```
+
+We can compute the probability of getting the slope b, if the population b = 0
+```{r}
+pValue <- mean(boot.dist > (-slope)) + mean(boot.dist < slope)
+pValue
+```
+
+### 3.1.4 Step 4
+Since p-value < 0.05, we can reject $H_0$. There is evidence of an association between the number of comments and the date($b \ne 0$).
+
+## 3.2 Visualize your findings by plotting the data along with the regression line.
+
+We will first extract the coefficients from our linear regression model.
+```{r}
+intercept <- coefficients(linRegression)[1]
+slope <- coefficients(linRegression)[2]
+```
+
+We will plot the data along with a regression line using the above coefficients.
+```{r}
+ggplot(iPhoneThreads, aes(x = dateNumeric, y = comments)) + 
+  geom_point() + geom_abline(intercept = intercept, slope = slope , color="red",  
+               linetype="solid", linewidth=1.5)
+```
+
+From the above plot there is evidence the number of comments is negatively correlated with the date. As the date increases, the number of comments decrease. This is confirmed by the negative slope value.
+
+# Question 4
+## 4. Perform a test to evaluate whether the number of threads is equally likely for each day
+
+Let us view the days of our posts
+```{r}
+unique(iPhoneThreads$date_utc)
+```
+
+## 4.1 Data Visualisation
+Convert the date to day of the week
+```{r}
+iPhoneThreads$dayOfWeek <- weekdays(as.Date(iPhoneThreads$date_utc))
+```
+
+Count how many threads were created on each day
+```{r}
+threadCountByDay <- table(iPhoneThreads$dayOfWeek)
+threadCountByDay
+```
+
+We can visualise the above thread distribution using a bar plot.
+
+We will first convert the above table into a dataframe, then rename the columns.
+```{r}
+threadCountByDayDF <- as.data.frame(threadCountByDay)
+names(threadCountByDayDF)[1] <- "DayOfWeek"
+names(threadCountByDayDF)[2] <- "Count"
+```
+
+
+We will also adjust the factor levels of day of week and reorder respectively.
+```{r}
+threadCountByDayDF$DayOfWeek = factor(threadCountByDayDF$DayOfWeek, levels= c("Monday", 
+    "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+```
+
+We will then plot the visualisation using a bar plot.
+```{r}
+ggplot(threadCountByDayDF, mapping=aes(x=DayOfWeek, y=Count)) +
+  geom_bar(stat='identity', fill="orange") + 
+  labs(title="Number of threads across the week", x="Day of Week", y="Thread Count")
+```
+
+From the above plot, there is evidence the number of threads posted across the weeks differs. However we can test this statement using a chi-squared goodness of fit test.
+
+## 4.2 Chi Squared Goodness of Fit
+
+We will use the iPhone subreddit for this question.
+
+We need to apply the **chi squared goodness of fit test** for a uniform distribution as there is only one categorical variable in the population **(number of threads)**. The test determines if sample data corresponds with the hypothesised distribution (Libretexts, 2023).
+
+### 4.2.1 Step 1
+
+$H_0$: The number of threads is equally likely for each day($p_{2023-09-30} = p_{2023-10-01} = p_{2023-10-02} = p_{2023-10-03} = p_{2023-10-04} = p_{2023-10-05} = p_{2023-10-06}$)
+
+$H_1$: The number of threads is not equally likely for each day
+
+## 4.2.2 Step 2
+$\alpha = 0.05$. Reject if p-value < 0.05
+
+## 4.2.3 Step 3 
+```{r}
+chiSquaredTest <- chisq.test(threadCountByDay)
+```
+
+We will verify our expected counts
+```{r}
+chiSquaredTest$expected
+```
+
+Since our expected counts is greater than 5. We can proceed and view the output of our chi-squared test. 
+
+```{r}
+chiSquaredTest
+```
+
+Since the p-value is less than $0.05$,we reject $H_0$. There is evidence the number of threads is not equally likely for each day.
+
+# 5. Question 5
+
+# Background:
+
+<html>
+
+<body>
+    <h2><strong> What is Mastodon ? </strong></h2>
+    <p>Mastodon is a decentralized social network made up of independent servers organized around specific themes,
+        topics, or interests.</p>
+    <p>People can join servers, follow each other, engage in conversations, and otherwise do all sorts of things they'd
+        expect to do on a social network like Twitter.</p>
+    <p>Mastodon has been around since March 2016 but it only really blew up in late 2022, when Elon Musk bought
+        the Twitter platform.</p>
+
+    <h2><strong> How does Mastodon work?</strong></h2>
+    <p>The biggest difference between Mastodon and Twitter can be summed up in a single word: decentralization.</p>
+    <p>Social media platforms like Twitter are centralized, meaning they're owned and operated by a single company.
+        That company builds features, moderates content, tweaks algorithms, and handles all other tasks that come
+        with running a social network.</p>
+    <p>Comparatively, while there are people at a non-profit company called "Mastodon gGmbH" that work on the
+        social platform known as Mastodon, the platform itself isn't centralized within that company. That's because
+        it's made up of thousands of independent servers. Think of a Mastodon server as a mini social network or
+        a forum. Usually, a server is organized around a specific interest, topic, or industry. Once you've joined a
+        server, you can follow, reply to, and engage with anyone on Mastodon, no matter what server they're on.</p>
+    <p>Mastodon is a network of servers, rather than a single social platform, businesses can't go through a single
+        person or platform to "do marketing" on Mastodon. Additionally, Mastodon's homepage states that the
+        service will never serve ads or push some profiles above others. Since Mastodon is run by a non-profit,
+        there's no profit incentive and no desire to work with advertisers.</p>
+    <p>In Mastodon, each server is essentially a self-contained community gathered around a single topic, whether
+        that's locality, a shared interest, or even a specific career.</p>
+    <p>Find the right server, and you can get unfiltered access to what really matters for your target demographic
+        or a new market segment. (Hootsuite 2022)</p>
+</body>
+
+</html>
+
+
+# Analysis: 
+
+# Authentication setup
+
+The auth_setup() function is used for setting up authentication to interact with the Mastodon's API:
+```{r}
+#auth_setup()
+```
+
+
+
+# 5.i Using Mastodon, identify users who are relevant to your chosen topic. 
+
+To identify the users who are relevant to our topic, i.e, "apple", we use the "search_accounts()" function. This function helps us to discover and retrieve the user accounts based on our keyword(topic), in our case, it is "apple". 
+```{r}
+users = search_accounts("apple")
+dim(users) #gives the dimension of users df
+```
+
+Now we have the 'users' dataframe obtained from the above 'search_accounts()' function, which has 40 rows and 21 columns. This users dataframe contains the details about our targeted users. To see what sort of details does this dataframe contains about our users, we can make use of names() function.
+```{r}
+names(users)
+```
+We can see, it has the details like, username, display_name, id, followers_count, following_count and many more. 
+
+To further confirm the relevance of the accounts obtained from the search_accounts() function to our topic, we can check the notes or profile descriptions mentioned on our users' profiles.
+```{r}
+o=order(users$followers_count, decreasing = TRUE) # sorts in decreasing order and prints the row ids
+acc_note=users$note[o[1:5]] #(bio)
+acc_note
+```
+From the output above, it seems all top 5 accounts are relevant to our topic.
+
+
+
+
+
+
+# 5.ii Identify the top five most popular users, based on the highest number of followers. 
+
+```{r}
+top_accs_ids=users$id[o[1:5]] # save the id of top 5 users with the highest number of followers.
+top_accs_username=users$username[o[1:5]] # save the username
+top_accs_act_name=users$acct[o[1:5]]  # save the accountname
+```
+
+We've stored key information for our top five users, including their username, user ID, and account name. Below, we'll present these details in a tabular format:
+```{r}
+# Create a data frame with the top user data
+top_users_data <- data.frame(
+  ID = top_accs_ids,
+  Username = top_accs_username,
+  AccountName = top_accs_act_name
+)
+
+# Print the data frame as a table
+knitr::kable(top_users_data)
+
+```
+
+
+From the output above,we can say the following are our top five most popular users, based on the highest number of followers:
+<br> apple_enthusiast
+<br> appleinsider
+<br> apple
+<br> apple
+<br> applesfera
+
+
+For our top third and forth user, we can see both of them share the same username, which is possible on platforms like Mastodon. Unlike Twitter or Instagram, Mastodon allows identical usernames, but the uniqueness is maintained by distinct server domains. For instance, the third user in our list has the username "apple," but we can see in table above that their account name is "apple@lemmy.world," while the fourth user uses "apple@lemmy.ml." The shared username is supplemented with different server domains, ensuring each account's individuality. Mastodon's approach might be less familiar due to its lower popularity. This concept is similar to email addressing.
+
+
+
+# 5.iii Download 50 followers and 50 friends (the users followed by your selected users) for each of these top five users. 
+
+## PartA: Downloading the followers
+
+To address this question, we'll first start by downloading the 50 followers for each of those top five users. 
+<br> Let's first check for all of our top five users, if they've sufficient(50 in our case) followers:
+
+```{r}
+# Create a data frame with usernames and their follower counts
+follower_counts <- users$followers_count[o[1:5]]
+follower_table <- data.frame(Username = top_accs_username, Followers = follower_counts)
+
+kable(follower_table, format = "markdown") # displays the table 
+
+
+```
+<br> From the table above, we can see we've enough followers count that we need for our analysis for all of our top five users.
+
+
+<br> Let's access the list of few followers for our top one user, i.e, 'apple_enthusiast':
+
+```{r}
+apple_enthusiast_followers <- get_account_followers(top_accs_ids[1], limit = 10)
+dim(apple_enthusiast_followers)
+```
+Unfortunately, we're not getting the list of followers for this user.
+
+<br> Let's check for another user, 'applesfera',:
+```{r}
+applesfera_followers <- get_account_followers(top_accs_ids[5], limit = 10)
+dim(applesfera_followers)
+```
+But for this user, we're getting the list of followers. 
+
+<br> So, what could be the issue?
+
+<br> After carefully investigating the issue, we've found that mastodon allows its users to adjust their privacy settings for followers and following lists, making them either public or private. If these lists are set to private, we are only able to see a count of followers, but not the actual list or details of followers.
+
+<br> That's what happened in the above scenario, apple_enthusiast has set it's followers list to private because of which we can only access it's followers count but the actual list of followers. 
+
+<br> To account for this Mastodon feature, we've extended our analysis from the top five to the top fifteen users [Permission allowed by Gizem]. Within our 'apple' topic, we observed that among the top ten users, only three have made their follower lists public. Consequently, we could only access the follower details for three users from this group. By expanding our analysis to the top 15, we can include five users, comprising the initial three from the top 10 and an additional two from the top 15, who have publicly accessible follower lists.
+
+
+<br> Considering this condition, we formulate our code to get followers data in a way that it iterates throught the top15 users and collects the followers of those users who allows us to access their followers list. And we've introduced the break condition as well inside our loop which will break our loop once it has get the required(5 users in our case) users' followers list. And it'll store user's followers in their respective individual dataframe.
+
+
+
+```{r}
+top_15accs_ids=users$id[o[1:15]] # save the id of top 15 users with the highest number of followers.
+
+# Create an empty list to store follower data frames
+followers_df_list <- list()
+
+# Initialize a counter to track the number of users' data collected
+num_users_collected <- 0
+
+# Iterate through the top 15 users
+for (user_id in top_15accs_ids) {
+  # Check if we have collected data for 5 accounts, and if so, exit the loop
+  if (num_users_collected >= 5) {
+    break
+  }
+
+  followers_data <- get_account_followers(user_id, limit = 50)
+
+  # Check if the followers_data is not empty (the user grants access)
+  if (!is.null(followers_data) && nrow(followers_data) > 0) {
+    num_users_collected <- num_users_collected + 1
+
+    # Print the user_id or user_name for which data is being collected
+    user_name <- users$username[which(users$id == user_id)]
+    cat("Collecting data for user:", user_name, "\n")
+
+    # Assign the followers_data to a data frame named after the user
+    followers_df_list[[user_name]] <- followers_data
+    
+    # Additionally, save the data frame as an individual variable
+    assign(paste0(user_name, "_followers_df" ), followers_data)
+  }
+}
+
+
+
+```
+Now, from the output above we can see that, we've successfully collected the list of 50 followers for our each five users from the list of top fifteen. 
+
+<br> And we've created the individual dataframes for all of these five users which consist of their followers. Even though, we've applied the limit=50, to get only 50 followers, for some users we've get more than 50 and for some less than 50. It's because some accounts are
+not discoverable hence less than the limit may be downloaded. On the other hand, when we prefer to download 50 friends automatic pagination is used. We may get more results than requested.
+
+<br> Let's display our chosen five users and the name of their individual dataframes which consisit their followers list:
+```{r}
+# Create a data frame with usernames and their respective data frame names
+usernames <- c("appleinsider", "applesfera", "AppleFanboy", "Applelianos", "apple_dumplin")
+df_names <- c("appleinsider_followers_df", "applesfera_followers_df", "AppleFanboy_followers_df", "Applelianos_followers_df", "apple_dumplin_followers_df")
+
+
+# Create a data frame to display the information
+user_df <- data.frame(Usernames = usernames, DataFrameNames = df_names)
+
+# Print the formatted table
+kable(user_df, format = "markdown")
+
+```
+
+
+
+
+
+<br> Also, we've followers_df_list  which consist of all our five users' dataframes.
+
+
+
+## Part B: Downloading 50 friends (the users followed by our selected users)
+In above part A, we've successfully downloaded the followers of our selected 5 users. Now in this part, we will download the 50 following of each followers that we've downloaded in part A. 
+
+<br> Defining the function which will help us in downloading the friends:
+```{r}
+get_follower_data <- function(follower_df) {
+  follower_ids <- follower_df$id
+  follower_usernames <- follower_df$username
+  
+  follower_data_list <- lapply(seq_along(follower_ids), function(i) {
+    follower_username <- follower_usernames[i]
+    following_data <- get_account_following(follower_ids[i], limit = 50)
+    following_usernames <- if (!is.null(following_data) && nrow(following_data) > 0) {
+      following_data$username
+    } else {
+      NULL
+    }
+    list(User = follower_username, Following = following_usernames)
+  })
+  
+  return(follower_data_list)
+}
+
+```
+
+
+
+following of followers of appleinsider:
+```{r}
+# Get follower data for follower_df_1
+friends_appleinsider <- get_follower_data(appleinsider_followers_df)
+```
+
+
+following of followers of applesfera:
+```{r}
+friends_applesfera <- get_follower_data(applesfera_followers_df)
+```
+
+
+Since we are making continuous API requests to gather extensive data from Mastodon, it's essential to introduce intermittent pauses (rest periods) to prevent potential errors. After this brief pause, we again continue collecting data. And it's also the one of the reasons, I have avoided for loop here and done it individually.
+```{r}
+Sys.sleep(120) #pause for 2 mins
+```
+
+
+following of followers of AppleFanboy:
+```{r}
+friends_AppleFanboy <- get_follower_data(AppleFanboy_followers_df)
+```
+
+
+following of followers of Applelianos:
+```{r}
+friends_Applelianos <- get_follower_data(Applelianos_followers_df)
+```
+
+
+following of followers of aaple_dumplin:
+```{r}
+friends_apple_dumplin <- get_follower_data(apple_dumplin_followers_df)
+```
+
+
+
+Finally, we've downloaded the following of followers of all five users as asked by our question. We'll use this collected data for our next question, where we've to create a graph and visualise the relationship among these users.
+
+
+
+# 5.iv Create a graph and visualize the relationships among these users. 
+
+
+## 5.iv.i Data Pre-processing: creating edgelist
+
+In order to create a graph, we first need an edgelist of our followers and their friends.
+
+edgelist for followers:
+```{r}
+# List of account names
+account_names <- c("appleinsider", "applesfera", "AppleFanboy", "Applelianos", "apple_dumplin")
+
+# Initialize an empty list to store the followers combined
+el_followers <- list()
+
+# Loop through account names
+for (account_name in account_names) {
+  # Get the followers data frame for the current account
+  followers_df <- get(paste0(account_name, "_followers_df"))
+  
+  # Create a data frame with account name and followers' usernames
+  account_rep <- rep(account_name, nrow(followers_df))
+  account_matrix <- data.frame(Account = account_rep, Username = followers_df$username)
+  
+  # Append the data frame to the list
+  el_followers <- c(el_followers, list(account_matrix))
+}
+
+# Combine all data frames into one final matrix
+el_followers <- as.matrix(do.call(rbind, el_followers))
+
+```
+
+
+
+<br> edgelist for friends(the users followed by our selected users):
+
+To create this edgelist first we define a function which will create a matrix with follower name and following names:
+```{r}
+combine_followers_following_matrix <- function(follower_list) {
+  follower_following_matrix <- matrix(ncol = 2)
+  colnames(follower_following_matrix) <- c("Follower", "Following")
+  
+  for (follower_data in follower_list) {
+    follower_username <- follower_data$User
+    following_usernames <- follower_data$Following
+    
+    # Create a matrix with the follower name and following names
+    follower_following <- cbind(rep(follower_username, length(following_usernames)), unlist(following_usernames))
+    
+    # Combine the matrix with the existing follower_following_matrix
+    follower_following_matrix <- rbind(follower_following_matrix, follower_following)
+  }
+  
+  return(follower_following_matrix)
+}
+```
+
+
+Now we'll create a list of follower data frames so that we can apply the function to each data frame and combine them into a final matrix(edgelist):
+```{r}
+# Create a list of follower data frames
+follower_data_frames <- list(
+  friends_appleinsider,
+  friends_applesfera,
+  friends_AppleFanboy,
+  friends_Applelianos,
+  friends_apple_dumplin
+)
+```
+
+
+Finally our edgelist for friends:
+```{r}
+el_friends <- do.call("rbind", lapply(follower_data_frames, combine_followers_following_matrix))
+
+```
+
+
+We will do the further data processing and remove if there is any NA rows:
+```{r}
+el_friends <- el_friends[complete.cases(el_friends), ]
+el_followers<- el_followers[complete.cases(el_followers), ]
+```
+
+
+creating a combined edgelist for followers and friends:
+```{r}
+
+el <- rbind(
+  el_friends,
+  el_followers
+)
+```
+
+
+Let's check the dimension and class of our final edgelist:
+```{r}
+dim(el)
+class(el)
+```
+
+Now that we have the edgelist needed for the graph, we can plot our graph:
+
+
+## 5.iv.ii Plotting the Graph:
+
+We make use of 'graph_from_edgelist()' function under igraph library to plot the graph for our data:
+```{r}
+g=graph_from_edgelist(el, directed = TRUE)
+plot(g, edge.arrow.size = 0.02, vertex.size = 3, vertex.label.cex = 0.02)
+
+```
+Since, el is a huge dataset that's the reason our graph is not interpretable.
+
+
+<br> We could try different layouts to make our graph looks nicer:
+
+fruchterman_reingold layout:
+```{r}
+plot(g, layout = layout.fruchterman.reingold, edge.arrow.size = 0.02, vertex.size = 3, vertex.label.cex = 0.02)
+```
+
+
+```{r}
+plot(g, layout = layout.fruchterman.reingold, vertex.size = 3,
+edge.arrow.size=0.02, vertex.color="gold",
+vertex.label.color="black",vertex.label.cex=0.02,edge.color="gray80")
+
+```
+
+random layout:
+```{r}
+plot(g, layout = layout.random, vertex.size = 3,
+edge.arrow.size=0.02, vertex.color="gold",
+vertex.label.color="black",vertex.label.cex=0.02,edge.color="gray80")
+```
+
+
+# 6. Question 6
+
+## 6. Find the most central users in your graph using all centrality measures you learned in this subject. Comment on your findings.
+
+We have mainly studied three centrality measures. They are:
+<br> Degree Centrality
+<br> Closeness Centrality
+<br> Betweenness Centrality
+
+
+### 6.i Degree centrality
+Degree centrality is a network centrality measure that quantifies the number of direct connections or edges a node has within a network. Its main feature is that it identifies how well-connected or popular a node is by counting its immediate neighbors, making it a straightforward measure to determine a node's local importance in a network.
+
+```{r}
+sort(degree(g), decreasing=TRUE)[1:15]
+```
+
+```{r}
+centralIDs=order(degree(g), decreasing=TRUE)[1:7]
+V(g)[centralIDs]
+
+```
+
+```{r}
+degree(g)[centralIDs]
+```
+
+Thus according to the degree centrality applesfera, appleinsider, Marcn_ar, Applelianos, AppleFanboy, ryanhoulihan and Abdelaali are the most central users.
+
+
+### 6.ii Closeness Centrality
+Closeness Centrality is a network centrality measure that quantifies how quickly a node can interact with other nodes in a network. It calculates the reciprocal of the average distance from a node to all other nodes. The main feature of closeness centrality is that it identifies nodes that can efficiently spread information or influence to other parts of the network, emphasizing their role in facilitating quick communication and interaction.
+```{r}
+sort(closeness(g), decreasing=TRUE)[1:10]
+```
+
+```{r}
+centralIDs=order(closeness(g), decreasing=TRUE)[1:10]
+V(g)[centralIDs]
+```
+
+```{r}
+closeness(g)[centralIDs]
+```
+Thus according to the Closeness centrality quicksilver84, apple_dumplin, technotramp, abdulwajed, 0xWDG, STARLINK, ryanhoulihan, gruenler, ThatMermaid_J and orbite are the most central users.
+
+
+### 6.iii Betweenness centrality
+Betweenness Centrality is a network centrality measure that identifies nodes that act as bridges or intermediaries between other nodes in a network. It quantifies the number of shortest paths passing through a node, highlighting its role in connecting different parts of the network. The main feature of betweenness centrality is its ability to reveal nodes that control the flow of information or resources, making it crucial for maintaining network cohesion and communication.
+
+```{r}
+sort(betweenness(g), decreasing=TRUE)[1:10]
+```
+
+
+```{r}
+centralIDs=order(betweenness(g), decreasing=TRUE)[1:5]
+V(g)[centralIDs]
+```
+
+Thus according to the betweenness centrality AppleFanboy, applesfera, Applelianos, appleinsider and Marcn_ar are the most central users.
+
+# 7. References
+
+Libretexts (2023) 9.4: Distribution needed for hypothesis testing, Statistics LibreTexts. Available at: https://stats.libretexts.org/Courses/Los_Angeles_City_College/Introductory_Statistics/09%3A_Hypothesis_Testing_with_One_Sample/9.04%3A_Distribution_Needed_for_Hypothesis_Testing (Accessed: 03 October 2023).
+
+Hootsuite. (2022). What Is Mastodon and Why Is Everyone Going There? Hootsuite. https://blog.hootsuite.com/what-is-mastodon/ (Accessed: 08 October 2023)
+
+# 7. References
+
+Libretexts (2023) 9.4: Distribution needed for hypothesis testing, Statistics LibreTexts. Available at: https://stats.libretexts.org/Courses/Los_Angeles_City_College/Introductory_Statistics/09%3A_Hypothesis_Testing_with_One_Sample/9.04%3A_Distribution_Needed_for_Hypothesis_Testing (Accessed: 03 October 2023).
+
